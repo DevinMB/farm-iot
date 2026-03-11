@@ -33,8 +33,9 @@ fi
 
 # ─── 2. Unseal ────────────────────────────────────────────────────────────────
 echo "==> Unsealing Vault..."
-UNSEAL_KEY=$(jq -r '.unseal_keys_b64[0]' "$KEYS_FILE")
-ROOT_TOKEN=$(jq -r '.root_token' "$KEYS_FILE")
+# Parse JSON without jq using grep + sed (jq not available in vault image)
+UNSEAL_KEY=$(grep -o '"unseal_keys_b64":\["[^"]*"' "$KEYS_FILE" | sed 's/.*\["\(.*\)"/\1/')
+ROOT_TOKEN=$(grep -o '"root_token":"[^"]*"' "$KEYS_FILE" | sed 's/"root_token":"\(.*\)"/\1/')
 vault operator unseal "$UNSEAL_KEY"
 export VAULT_TOKEN="$ROOT_TOKEN"
 
