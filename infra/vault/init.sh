@@ -22,8 +22,8 @@ KEYS_FILE="/vault/keys/keys.json"
 
 # ─── 1. Initialize Vault ──────────────────────────────────────────────────────
 echo "==> Checking Vault init status..."
-if vault status 2>&1 | grep -q "Initialized.*true"; then
-  echo "    Vault already initialized, skipping init."
+if [ -f "$KEYS_FILE" ]; then
+  echo "    Keys file already exists — Vault already initialized, skipping init."
 else
   echo "==> Initializing Vault (1 key share, threshold 1)..."
   vault operator init -key-shares=1 -key-threshold=1 -format=json > "$KEYS_FILE"
