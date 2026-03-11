@@ -21,7 +21,7 @@ while true; do
 
   if [ "$SEALED" = "true" ]; then
     echo "==> vault-unseal: Vault is sealed — unsealing..."
-    UNSEAL_KEY=$(awk -F'"' '/unseal_keys_hex/{getline; print $2}' "$KEYS_FILE")
+    UNSEAL_KEY=$(jq -r '.unseal_keys_hex[0]' "$KEYS_FILE")
     vault operator unseal "$UNSEAL_KEY" && echo "==> vault-unseal: unsealed successfully" || echo "==> vault-unseal: unseal failed, will retry"
   fi
 
