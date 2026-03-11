@@ -20,7 +20,6 @@ services:
       - farmsense
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./infra/traefik/traefik.yml:/traefik.yml:ro
@@ -68,7 +67,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.vault.rule=Host(`vault.${DOMAIN}`)"
-      - "traefik.http.routers.vault.entrypoints=websecure"
+      - "traefik.http.routers.vault.entrypoints=web"
       - "traefik.http.services.vault.loadbalancer.server.port=8200"
 
   # ─── Vault Auto-Unseal Sidecar ────────────────────────────────────────────
@@ -176,7 +175,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.kafka-ui.rule=Host(`kafka.${DOMAIN}`)"
-      - "traefik.http.routers.kafka-ui.entrypoints=websecure"
+      - "traefik.http.routers.kafka-ui.entrypoints=web"
       - "traefik.http.services.kafka-ui.loadbalancer.server.port=8080"
 
   # ─── Go API ───────────────────────────────────────────────────────────────
@@ -208,7 +207,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.api.rule=Host(`api.${DOMAIN}`)"
-      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.entrypoints=web"
       - "traefik.http.services.api.loadbalancer.server.port=8080"
 
   # ─── Go Kafka Consumer ────────────────────────────────────────────────────
@@ -251,5 +250,5 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)"
-      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.entrypoints=web"
       - "traefik.http.services.frontend.loadbalancer.server.port=80"
