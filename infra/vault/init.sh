@@ -36,8 +36,8 @@ echo "==> Unsealing Vault..."
 # Parse pretty-printed JSON using awk (available in busybox/alpine)
 UNSEAL_KEY=$(awk -F'"' '/unseal_keys_hex/{getline; print $2}' "$KEYS_FILE")
 ROOT_TOKEN=$(awk -F'"' '/root_token/{print $4}' "$KEYS_FILE")
-echo "    Parsed unseal key: ${UNSEAL_KEY:0:8}... (truncated)"
-echo "    Parsed root token: ${ROOT_TOKEN:0:8}... (truncated)"
+echo "    Parsed unseal key OK"
+echo "    Parsed root token OK"
 # Attempt unseal — safe to run even if already unsealed
 if [ -n "$UNSEAL_KEY" ]; then
   vault operator unseal "$UNSEAL_KEY" || echo "    Already unsealed or unseal failed (continuing)"
