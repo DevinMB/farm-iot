@@ -16,7 +16,7 @@
 #   INFLUXDB_ADMIN_TOKEN=... JWT_SECRET=$(openssl rand -hex 64) \
 #   ./infra/vault/init.sh
 
-set -euo pipefail
+set -eu
 
 KEYS_FILE="/vault/keys/keys.json"
 
@@ -37,12 +37,8 @@ echo "==> Unsealing Vault..."
 # Use hex key (easier to extract from multiline output)
 UNSEAL_KEY=$(grep '"unseal_keys_hex"' -A1 "$KEYS_FILE" | grep -o '"[a-f0-9]*"' | tr -d '"')
 ROOT_TOKEN=$(grep '"root_token"' "$KEYS_FILE" | sed 's/.*"root_token": *"\([^"]*\)".*/\1/')
-# Only unseal if currently sealed
-if vault status 2>&1 | grep -q "Sealed.*true"; then
-  vault operator unseal "$UNSEAL_KEY"
-else
-  echo "    Vault already unsealed, skipping."
-fi
+# Attempt unseal — safe to run even if already unsealed
+vault operator unseal "$UNSEAL_KEY" || echo "    Already unsealed or unseal failed (continuing)"
 export VAULT_TOKEN="$ROOT_TOKEN"
 
 # ─── 3. Enable engines ────────────────────────────────────────────────────────
