@@ -33,10 +33,16 @@ fi
 
 # ─── 2. Unseal ────────────────────────────────────────────────────────────────
 echo "==> Unsealing Vault..."
-# Parse JSON without jq using grep + sed (jq not available in vault image)
-UNSEAL_KEY=$(grep -o '"unseal_keys_b64":\["[^"]*"' "$KEYS_FILE" | sed 's/.*\["\(.*\)"/\1/')
-ROOT_TOKEN=$(grep -o '"root_token":"[^"]*"' "$KEYS_FILE" | sed 's/"root_token":"\(.*\)"/\1/')
-vault operator unseal "$UNSEAL_KEY"
+# Parse pretty-printed JSON without jq (not available in vault image)
+# Use hex key (easier to extract from multiline output)
+UNSEAL_KEY=$(grep '"unseal_keys_hex"' -A1 "$KEYS_FILE" | grep -o '"[a-f0-9]*"' | tr -d '"')
+ROOT_TOKEN=$(grep '"root_token"' "$KEYS_FILE" | sed 's/.*"root_token": *"\([^"]*\)".*/\1/')
+# Only unseal if currently sealed
+if vault status 2>&1 | grep -q "Sealed.*true"; then
+  vault operator unseal "$UNSEAL_KEY"
+else
+  echo "    Vault already unsealed, skipping."
+fi
 export VAULT_TOKEN="$ROOT_TOKEN"
 
 # ─── 3. Enable engines ────────────────────────────────────────────────────────

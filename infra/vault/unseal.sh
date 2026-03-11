@@ -21,7 +21,7 @@ while true; do
 
   if [ "$SEALED" = "true" ]; then
     echo "==> vault-unseal: Vault is sealed — unsealing..."
-    UNSEAL_KEY=$(grep -o '"unseal_keys_b64":\["[^"]*"' "$KEYS_FILE" | grep -o '"[^"]*"$' | tr -d '"')
+    UNSEAL_KEY=$(grep '"unseal_keys_hex"' -A1 "$KEYS_FILE" | grep -o '"[a-f0-9]*"' | tr -d '"')
     vault operator unseal "$UNSEAL_KEY" && echo "==> vault-unseal: unsealed successfully" || echo "==> vault-unseal: unseal failed, will retry"
   fi
 
