@@ -1,5 +1,3 @@
-version: "3.9"
-
 networks:
   farmsense:
     driver: bridge
@@ -137,7 +135,7 @@ services:
 
   # ─── Kafka (KRaft mode) ───────────────────────────────────────────────────
   kafka:
-    image: bitnami/kafka:3.7
+    image: bitnami/kafka:3.9
     container_name: kafka
     restart: unless-stopped
     networks:
