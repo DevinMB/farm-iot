@@ -16,7 +16,7 @@
 #   INFLUXDB_ADMIN_TOKEN=... JWT_SECRET=$(openssl rand -hex 64) \
 #   ./infra/vault/init.sh
 
-set -eu
+# Note: no strict mode — busybox ash compatibility, errors handled explicitly
 
 KEYS_FILE="/vault/keys/keys.json"
 
@@ -27,7 +27,7 @@ if [ -f "$KEYS_FILE" ]; then
 else
   echo "==> Initializing Vault (1 key share, threshold 1)..."
   vault operator init -key-shares=1 -key-threshold=1 -format=json > "$KEYS_FILE"
-  chmod 600 "$KEYS_FILE"
+  chmod 644 "$KEYS_FILE"
   echo "    Keys saved to $KEYS_FILE (inside vault_keys Docker volume)"
 fi
 
