@@ -10,9 +10,12 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/farmsense/api/internal/config"
+	"github.com/farmsense/api/internal/db"
+	"github.com/farmsense/api/internal/handlers"
+	authmw "github.com/farmsense/api/internal/middleware"
 )
 
 func main() {
@@ -30,11 +33,39 @@ func main() {
 	}
 	slog.Info("config loaded", "influx_url", cfg.InfluxURL, "kafka", cfg.KafkaBrokers)
 
+	slog.Info("connecting to database...")
+	pool, err := db.New(ctx, cfg.PostgresDSN)
+	if err != nil {
+		slog.Error("failed to connect to database", "err", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+	slog.Info("database connected and schema migrated")
+
+	authHandler := handlers.NewAuthHandler(pool, cfg.JWTSecret)
+	farmHandler := handlers.NewFarmHandler(pool)
+	hubHandler := handlers.NewHubHandler(pool)
+	nodeHandler := handlers.NewNodeHandler(pool, cfg.InfluxURL, cfg.InfluxToken, cfg.InfluxOrg, cfg.InfluxBucket)
+
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
+	r.Use(chimiddleware.RequestID)
+	r.Use(chimiddleware.RealIP)
+	r.Use(chimiddleware.Logger)
+	r.Use(chimiddleware.Recoverer)
+
+	// CORS middleware — allow any origin (behind Cloudflare Tunnel)
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -42,8 +73,30 @@ func main() {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// TODO: wire cfg into handlers (auth, farms, hubs, nodes, sensors)
-	_ = cfg
+	r.Route("/api", func(r chi.Router) {
+		// Public routes
+		r.Post("/auth/register", authHandler.Register)
+		r.Post("/auth/login", authHandler.Login)
+
+		// Protected routes
+		r.Group(func(r chi.Router) {
+			r.Use(authmw.JWTMiddleware(cfg.JWTSecret))
+
+			r.Get("/farms", farmHandler.List)
+			r.Post("/farms", farmHandler.Create)
+			r.Get("/farms/{farmId}", farmHandler.Get)
+			r.Get("/farms/{farmId}/stats", farmHandler.Stats)
+			r.Get("/farms/{farmId}/hubs", hubHandler.List)
+			r.Post("/farms/{farmId}/hubs", hubHandler.Create)
+
+			r.Get("/hubs/{hubId}", hubHandler.Get)
+			r.Get("/hubs/{hubId}/provision", hubHandler.Provision)
+			r.Get("/hubs/{hubId}/nodes", nodeHandler.List)
+			r.Post("/hubs/{hubId}/nodes", nodeHandler.Create)
+
+			r.Get("/nodes/{nodeId}/readings", nodeHandler.Readings)
+		})
+	})
 
 	srv := &http.Server{
 		Addr:         ":8080",

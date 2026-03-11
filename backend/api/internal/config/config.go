@@ -57,9 +57,17 @@ func Load(ctx context.Context) (*Config, error) {
 	}
 
 	pgDB := mustEnv("POSTGRES_DB")
+	pgAdminUser := mustEnv("POSTGRES_USER")
+	pgAdminPass := mustEnv("POSTGRES_PASSWORD")
+
+	// Use admin DSN for migrations and runtime pool.
+	// The Vault dynamic creds (pgUser/pgPass) are reserved for future use
+	// once we add ALTER DEFAULT PRIVILEGES to the schema.
+	_ = pgUser
+	_ = pgPass
 	postgresDSN := fmt.Sprintf(
 		"postgres://%s:%s@postgres:5432/%s?sslmode=disable",
-		pgUser, pgPass, pgDB,
+		pgAdminUser, pgAdminPass, pgDB,
 	)
 
 	return &Config{
