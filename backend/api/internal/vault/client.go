@@ -25,12 +25,15 @@ func New(ctx context.Context, addr, roleID, secretID string) (*Client, error) {
 		return nil, fmt.Errorf("vault client: %w", err)
 	}
 
-	secret, err := v.Auth().Login(ctx, &vault.AppRoleLoginInput{
-		RoleID:   roleID,
-		SecretID: secretID,
+	secret, err := v.Logical().WriteWithContext(ctx, "auth/approle/login", map[string]interface{}{
+		"role_id":   roleID,
+		"secret_id": secretID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("vault approle login: %w", err)
+	}
+	if secret.Auth == nil {
+		return nil, fmt.Errorf("vault approle login: no auth info returned")
 	}
 
 	v.SetToken(secret.Auth.ClientToken)
