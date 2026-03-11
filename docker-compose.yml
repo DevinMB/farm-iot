@@ -89,7 +89,7 @@ services:
     volumes:
       - vault_keys:/vault/keys:ro
       - ./infra/vault/unseal.sh:/unseal.sh:ro
-    entrypoint: ["/bin/sh", "/unseal.sh"]
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache jq >/dev/null 2>&1 && exec sh /unseal.sh"]
 
   # ─── PostgreSQL ───────────────────────────────────────────────────────────
   postgres:
