@@ -3,7 +3,6 @@
 
 # Go
 backend/*/vendor/
-backend/*/*.sum
 
 # Node
 frontend/node_modules/
