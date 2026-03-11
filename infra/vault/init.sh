@@ -33,12 +33,18 @@ fi
 
 # ─── 2. Unseal ────────────────────────────────────────────────────────────────
 echo "==> Unsealing Vault..."
-# Parse pretty-printed JSON without jq (not available in vault image)
-# Use hex key (easier to extract from multiline output)
-UNSEAL_KEY=$(grep '"unseal_keys_hex"' -A1 "$KEYS_FILE" | grep -o '"[a-f0-9]*"' | tr -d '"')
-ROOT_TOKEN=$(grep '"root_token"' "$KEYS_FILE" | sed 's/.*"root_token": *"\([^"]*\)".*/\1/')
+# Parse pretty-printed JSON using awk (available in busybox/alpine)
+UNSEAL_KEY=$(awk -F'"' '/unseal_keys_hex/{getline; print $2}' "$KEYS_FILE")
+ROOT_TOKEN=$(awk -F'"' '/root_token/{print $4}' "$KEYS_FILE")
+echo "    Parsed unseal key: ${UNSEAL_KEY:0:8}... (truncated)"
+echo "    Parsed root token: ${ROOT_TOKEN:0:8}... (truncated)"
 # Attempt unseal — safe to run even if already unsealed
-vault operator unseal "$UNSEAL_KEY" || echo "    Already unsealed or unseal failed (continuing)"
+if [ -n "$UNSEAL_KEY" ]; then
+  vault operator unseal "$UNSEAL_KEY" || echo "    Already unsealed or unseal failed (continuing)"
+else
+  echo "    ERROR: could not parse unseal key from $KEYS_FILE"
+  exit 1
+fi
 export VAULT_TOKEN="$ROOT_TOKEN"
 
 # ─── 3. Enable engines ────────────────────────────────────────────────────────
