@@ -6,6 +6,11 @@ path "secret/data/farmsense/*" {
   capabilities = ["read"]
 }
 
+# Generate dynamic Postgres credentials
+path "database/creds/api-db-role" {
+  capabilities = ["read"]
+}
+
 # Allow the API to issue AppRole secret_ids for new hubs during device registration
 path "auth/approle/role/hub-role/secret-id" {
   capabilities = ["create", "update"]

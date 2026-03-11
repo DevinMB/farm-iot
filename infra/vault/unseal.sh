@@ -1,8 +1,11 @@
 #!/bin/sh
 # vault-unseal sidecar
-# Polls Vault every 30 seconds. If sealed, unseals using the key stored
+# Polls Vault every 10 seconds. If sealed, unseals using the key stored
 # in the vault_keys volume written by init.sh.
 # Runs forever — Docker restart policy handles any crashes.
+#
+# Uses vault status exit code (not JSON parsing) to detect sealed state:
+#   0 = unsealed, 1 = error, 2 = sealed
 
 KEYS_FILE="/vault/keys/keys.json"
 
@@ -15,15 +18,18 @@ done
 echo "==> vault-unseal: keys found, entering watch loop"
 
 while true; do
-  # Check if sealed
-  STATUS=$(vault status -format=json 2>/dev/null || echo '{"sealed":true}')
-  SEALED=$(echo "$STATUS" | grep -o '"sealed":[a-z]*' | cut -d: -f2)
+  vault status > /dev/null 2>&1
+  STATUS_CODE=$?
 
-  if [ "$SEALED" = "true" ]; then
+  if [ "$STATUS_CODE" = "2" ]; then
     echo "==> vault-unseal: Vault is sealed — unsealing..."
     UNSEAL_KEY=$(jq -r '.unseal_keys_hex[0]' "$KEYS_FILE")
-    vault operator unseal "$UNSEAL_KEY" && echo "==> vault-unseal: unsealed successfully" || echo "==> vault-unseal: unseal failed, will retry"
+    vault operator unseal "$UNSEAL_KEY" \
+      && echo "==> vault-unseal: unsealed successfully" \
+      || echo "==> vault-unseal: unseal failed, will retry"
+  elif [ "$STATUS_CODE" = "1" ]; then
+    echo "==> vault-unseal: Vault unreachable, will retry..."
   fi
 
-  sleep 30
+  sleep 10
 done
