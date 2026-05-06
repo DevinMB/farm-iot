@@ -68,7 +68,7 @@ func (h *NodeHandler) List(w http.ResponseWriter, r *http.Request) {
 		`SELECT EXISTS(
 			SELECT 1 FROM hubs h
 			JOIN farms f ON f.id = h.farm_id
-			WHERE h.id = $1 AND f.user_id = $2
+			WHERE h.id = $1 AND (f.user_id = $2 OR EXISTS(SELECT 1 FROM farm_members fm WHERE fm.farm_id = f.id AND fm.user_id = $2))
 		)`,
 		hubID, userID,
 	).Scan(&hubExists)
@@ -117,7 +117,7 @@ func (h *NodeHandler) Create(w http.ResponseWriter, r *http.Request) {
 		`SELECT EXISTS(
 			SELECT 1 FROM hubs h
 			JOIN farms f ON f.id = h.farm_id
-			WHERE h.id = $1 AND f.user_id = $2
+			WHERE h.id = $1 AND (f.user_id = $2 OR EXISTS(SELECT 1 FROM farm_members fm WHERE fm.farm_id = f.id AND fm.user_id = $2))
 		)`,
 		hubID, userID,
 	).Scan(&hubExists)
@@ -153,6 +153,37 @@ func (h *NodeHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, n)
+}
+
+// Delete handles DELETE /api/nodes/:nodeId
+func (h *NodeHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authmw.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	nodeID := chi.URLParam(r, "nodeId")
+
+	result, err := h.pool.Exec(r.Context(),
+		`DELETE FROM nodes n
+		 USING hubs h, farms f
+		 WHERE n.id = $1
+		   AND n.hub_id = h.id
+		   AND h.farm_id = f.id
+		   AND (f.user_id = $2 OR EXISTS(SELECT 1 FROM farm_members fm WHERE fm.farm_id = f.id AND fm.user_id = $2))`,
+		nodeID, userID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete node")
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Readings handles GET /api/nodes/:nodeId/readings?range=24h

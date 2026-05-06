@@ -182,8 +182,8 @@ services:
   # All secrets fetched from Vault at startup via AppRole — not from env vars.
   api:
     build:
-      context: ./backend/api
-      dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: api/Dockerfile
     container_name: api
     restart: unless-stopped
     networks:
@@ -207,6 +207,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - INFLUXDB_ORG=${INFLUXDB_ORG}
       - INFLUXDB_BUCKET=${INFLUXDB_BUCKET}
+      - DOMAIN=${DOMAIN}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.api.rule=Host(`api.${DOMAIN}`)"

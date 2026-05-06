@@ -25,6 +25,12 @@ type Config struct {
 
 	// Auth
 	JWTSecret string
+
+	// Vault client — for hub AppRole credential generation
+	Vault *vaultclient.Client
+
+	// Domain — public-facing domain (e.g. farmiot.devinbutts.net)
+	Domain string
 }
 
 // Load authenticates with Vault and fetches all secrets, returning a Config.
@@ -78,6 +84,8 @@ func Load(ctx context.Context) (*Config, error) {
 		InfluxBucket: mustEnv("INFLUXDB_BUCKET"),
 		KafkaBrokers: mustEnv("KAFKA_BROKERS"),
 		JWTSecret:    str(apiData["jwt_secret"]),
+		Vault:        vc,
+		Domain:       mustEnv("DOMAIN"),
 	}, nil
 }
 

@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	authmw "github.com/farmsense/api/internal/middleware"
+	vaultclient "github.com/farmsense/api/internal/vault"
 )
 
 // Hub represents a hub record.
@@ -28,12 +28,14 @@ type Hub struct {
 
 // HubHandler handles hub routes.
 type HubHandler struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	vault  *vaultclient.Client
+	domain string
 }
 
 // NewHubHandler creates a new HubHandler.
-func NewHubHandler(pool *pgxpool.Pool) *HubHandler {
-	return &HubHandler{pool: pool}
+func NewHubHandler(pool *pgxpool.Pool, vault *vaultclient.Client, domain string) *HubHandler {
+	return &HubHandler{pool: pool, vault: vault, domain: domain}
 }
 
 // List handles GET /api/farms/:farmId/hubs
@@ -46,13 +48,7 @@ func (h *HubHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	farmID := chi.URLParam(r, "farmId")
 
-	// Verify farm ownership
-	var farmExists bool
-	err := h.pool.QueryRow(r.Context(),
-		`SELECT EXISTS(SELECT 1 FROM farms WHERE id = $1 AND user_id = $2)`,
-		farmID, userID,
-	).Scan(&farmExists)
-	if err != nil || !farmExists {
+	if !userCanAccessFarm(r.Context(), h.pool, farmID, userID) {
 		writeError(w, http.StatusNotFound, "farm not found")
 		return
 	}
@@ -92,13 +88,7 @@ func (h *HubHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	farmID := chi.URLParam(r, "farmId")
 
-	// Verify farm ownership
-	var farmExists bool
-	err := h.pool.QueryRow(r.Context(),
-		`SELECT EXISTS(SELECT 1 FROM farms WHERE id = $1 AND user_id = $2)`,
-		farmID, userID,
-	).Scan(&farmExists)
-	if err != nil || !farmExists {
+	if !userCanAccessFarm(r.Context(), h.pool, farmID, userID) {
 		writeError(w, http.StatusNotFound, "farm not found")
 		return
 	}
@@ -116,11 +106,18 @@ func (h *HubHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate Vault AppRole credentials for this hub
+	roleID, secretID, err := h.vault.CreateHubCredentials(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create hub credentials")
+		return
+	}
+
 	var hub Hub
 	err = h.pool.QueryRow(r.Context(),
-		`INSERT INTO hubs (farm_id, name) VALUES ($1, $2)
+		`INSERT INTO hubs (farm_id, name, vault_role_id, vault_secret_id) VALUES ($1, $2, $3, $4)
 		 RETURNING id, farm_id, name, vault_role_id, vault_secret_id, last_seen, created_at`,
-		farmID, req.Name,
+		farmID, req.Name, roleID, secretID,
 	).Scan(&hub.ID, &hub.FarmID, &hub.Name, &hub.VaultRoleID, &hub.VaultSecretID, &hub.LastSeen, &hub.CreatedAt)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create hub")
@@ -146,7 +143,7 @@ func (h *HubHandler) Get(w http.ResponseWriter, r *http.Request) {
 		`SELECT h.id, h.farm_id, h.name, h.vault_role_id, h.vault_secret_id, h.last_seen, h.created_at
 		 FROM hubs h
 		 JOIN farms f ON f.id = h.farm_id
-		 WHERE h.id = $1 AND f.user_id = $2`,
+		 WHERE h.id = $1 AND (f.user_id = $2 OR EXISTS(SELECT 1 FROM farm_members fm WHERE fm.farm_id = f.id AND fm.user_id = $2))`,
 		hubID, userID,
 	).Scan(&hub.ID, &hub.FarmID, &hub.Name, &hub.VaultRoleID, &hub.VaultSecretID, &hub.LastSeen, &hub.CreatedAt)
 	if err != nil {
@@ -180,6 +177,33 @@ func (h *HubHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, hub)
 }
 
+// Delete handles DELETE /api/hubs/:hubId
+func (h *HubHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authmw.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	hubID := chi.URLParam(r, "hubId")
+
+	result, err := h.pool.Exec(r.Context(),
+		`DELETE FROM hubs h USING farms f
+		 WHERE h.id = $1 AND h.farm_id = f.id AND f.user_id = $2`,
+		hubID, userID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete hub")
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "hub not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Provision handles GET /api/hubs/:hubId/provision
 func (h *HubHandler) Provision(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authmw.UserIDFromContext(r.Context())
@@ -190,26 +214,25 @@ func (h *HubHandler) Provision(w http.ResponseWriter, r *http.Request) {
 
 	hubID := chi.URLParam(r, "hubId")
 
+	arch := r.URL.Query().Get("arch")
+	switch arch {
+	case "armv7", "arm64":
+		// valid
+	default:
+		arch = "armv6"
+	}
+
 	var hub Hub
 	err := h.pool.QueryRow(r.Context(),
 		`SELECT h.id, h.farm_id, h.name, h.vault_role_id, h.vault_secret_id, h.last_seen, h.created_at
 		 FROM hubs h
 		 JOIN farms f ON f.id = h.farm_id
-		 WHERE h.id = $1 AND f.user_id = $2`,
+		 WHERE h.id = $1 AND (f.user_id = $2 OR EXISTS(SELECT 1 FROM farm_members fm WHERE fm.farm_id = f.id AND fm.user_id = $2))`,
 		hubID, userID,
 	).Scan(&hub.ID, &hub.FarmID, &hub.Name, &hub.VaultRoleID, &hub.VaultSecretID, &hub.LastSeen, &hub.CreatedAt)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "hub not found")
 		return
-	}
-
-	// Extract server host from request, strip port
-	serverHost := r.Host
-	if idx := strings.LastIndex(serverHost, ":"); idx != -1 {
-		serverHost = serverHost[:idx]
-	}
-	if serverHost == "" {
-		serverHost = "farmsense.local"
 	}
 
 	script := fmt.Sprintf(`#!/bin/bash
@@ -218,42 +241,112 @@ func (h *HubHandler) Provision(w http.ResponseWriter, r *http.Request) {
 # Generated: %s
 set -euo pipefail
 
-HUB_ID="%s"
-VAULT_ADDR="http://%s:8200"
-VAULT_ROLE_ID="%s"
-VAULT_SECRET_ID="%s"
-KAFKA_BROKERS="%s:9092"
+API_URL="http://api.%s"
+REBOOT_NEEDED=false
 
 echo "==> FarmSense Hub Setup"
-echo "    Hub ID: $HUB_ID"
+echo "    Hub ID: %s"
+echo "    API:    $API_URL"
 
 # Install dependencies
 apt-get update -qq
-apt-get install -y -qq curl jq
+apt-get install -y -qq curl
 
-# Write config
+# Enable SPI (required for LoRa HAT)
+CONFIG_FILE=""
+if   [ -f /boot/firmware/config.txt ]; then CONFIG_FILE=/boot/firmware/config.txt  # Pi OS Bookworm+
+elif [ -f /boot/config.txt ];          then CONFIG_FILE=/boot/config.txt            # Pi OS Bullseye
+fi
+if [ -n "$CONFIG_FILE" ]; then
+    if ! grep -q "^dtparam=spi=on" "$CONFIG_FILE"; then
+        echo "dtparam=spi=on" >> "$CONFIG_FILE"
+        echo "==> SPI enabled in $CONFIG_FILE (reboot required)"
+        REBOOT_NEEDED=true
+    else
+        echo "==> SPI already enabled"
+    fi
+fi
+
+# Write config (values embedded at generation time, not shell variables)
 mkdir -p /etc/farmsense
-cat > /etc/farmsense/config.env << EOF
-HUB_ID=$HUB_ID
-VAULT_ADDR=$VAULT_ADDR
-VAULT_ROLE_ID=$VAULT_ROLE_ID
-VAULT_SECRET_ID=$VAULT_SECRET_ID
-KAFKA_BROKERS=$KAFKA_BROKERS
-EOF
-chmod 600 /etc/farmsense/config.env
+cat > /etc/farmsense/config.env << 'ENVEOF'
+HUB_ID=%s
+VAULT_ADDR=http://vault.%s
+VAULT_ROLE_ID=%s
+VAULT_SECRET_ID=%s
+API_URL=http://api.%s
 
-echo "==> Hub configured successfully!"
-echo "    Config written to /etc/farmsense/config.env"
-echo "    Hub software installation coming soon."
+# ── LoRa HAT (SX1262) ──────────────────────────────────────────────────────
+LORA_ENABLED=true
+LORA_SPI_DEV=/dev/spidev0.0
+# GPIO pin numbers (BCM). Adjust if your HAT uses different pins.
+LORA_RESET_PIN=22
+LORA_BUSY_PIN=23
+LORA_DIO1_PIN=6
+# Radio parameters — must match your ESP32 firmware
+LORA_FREQ_HZ=915000000
+LORA_SF=7
+LORA_BW_CODE=4
+LORA_CR=1
+ENVEOF
+chmod 600 /etc/farmsense/config.env
+echo "==> Config written to /etc/farmsense/config.env"
+
+# Download hub daemon binary (%s)
+echo "==> Downloading hub daemon..."
+curl -fsSL "$API_URL/api/hub/daemon?arch=%s" -o /usr/local/bin/farmsense-hub
+chmod +x /usr/local/bin/farmsense-hub
+echo "==> Daemon installed at /usr/local/bin/farmsense-hub"
+
+# Install systemd service
+cat > /etc/systemd/system/farmsense-hub.service << 'SVCEOF'
+[Unit]
+Description=FarmSense Hub Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/farmsense-hub
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+systemctl daemon-reload
+systemctl enable farmsense-hub
+
+if [ "$REBOOT_NEEDED" = "true" ]; then
+    echo ""
+    echo "==> Setup complete! SPI was just enabled — a reboot is required."
+    echo "    Run: sudo reboot"
+    echo "    After reboot the FarmSense daemon will start automatically."
+else
+    systemctl start farmsense-hub
+    echo ""
+    echo "==> FarmSense Hub is running!"
+    echo "    View logs: journalctl -u farmsense-hub -f"
+    echo "    Status:    systemctl status farmsense-hub"
+fi
 `,
 		hub.Name,
 		hub.ID,
 		time.Now().UTC().Format(time.RFC3339),
+		h.domain,
 		hub.ID,
-		serverHost,
+		// config.env literal values
+		hub.ID,
+		h.domain,
 		hub.VaultRoleID,
 		hub.VaultSecretID,
-		serverHost,
+		h.domain,
+		// daemon download
+		arch,
+		arch,
 	)
 
 	w.Header().Set("Content-Type", "text/x-shellscript")

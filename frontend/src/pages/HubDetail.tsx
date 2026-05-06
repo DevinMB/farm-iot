@@ -5,7 +5,7 @@ import HubCard from '../components/HubCard'
 import NodeCard from '../components/NodeCard'
 import SensorChart from '../components/SensorChart'
 import AddModal from '../components/AddModal'
-import { apiHub, apiHubNodes, apiCreateNode, downloadProvisionScript } from '../api/client'
+import { apiHub, apiHubNodes, apiCreateNode, apiDeleteNode, apiDeleteHub, downloadProvisionScript } from '../api/client'
 import type { Hub, Node, SensorType } from '../types'
 
 const SENSOR_TYPES: SensorType[] = [
@@ -44,12 +44,17 @@ export default function HubDetail() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const [piArch, setPiArch] = useState('armv6')
+  const [showSetupSteps, setShowSetupSteps] = useState(false)
+
   const [showAddNode, setShowAddNode] = useState(false)
   const [nodeName, setNodeName] = useState('')
   const [nodeSensorType, setNodeSensorType] = useState<SensorType>('temperature')
   const [nodeUnit, setNodeUnit] = useState(DEFAULT_UNITS['temperature'])
   const [addingNode, setAddingNode] = useState(false)
   const [addNodeError, setAddNodeError] = useState<string | null>(null)
+  const [newNodeId, setNewNodeId] = useState<string | null>(null)
+  const [copiedNodeId, setCopiedNodeId] = useState(false)
 
   useEffect(() => {
     if (!hubId) return
@@ -74,7 +79,7 @@ export default function HubDetail() {
     try {
       const node = await apiCreateNode(hubId, nodeName, nodeSensorType, nodeUnit)
       setNodes((prev) => [...prev, node])
-      setShowAddNode(false)
+      setNewNodeId(node.id)
       setNodeName('')
       setNodeSensorType('temperature')
       setNodeUnit(DEFAULT_UNITS['temperature'])
@@ -88,6 +93,21 @@ export default function HubDetail() {
   function handleSensorTypeChange(st: SensorType) {
     setNodeSensorType(st)
     setNodeUnit(DEFAULT_UNITS[st])
+  }
+
+  function closeAddNode() {
+    setShowAddNode(false)
+    setAddNodeError(null)
+    setNewNodeId(null)
+    setCopiedNodeId(false)
+  }
+
+  function copyNodeId() {
+    if (!newNodeId) return
+    navigator.clipboard.writeText(newNodeId).then(() => {
+      setCopiedNodeId(true)
+      setTimeout(() => setCopiedNodeId(false), 2000)
+    })
   }
 
   if (loading) {
@@ -135,13 +155,64 @@ export default function HubDetail() {
             )}
           </div>
         </div>
-        <button
-          className="btn btn-outline"
-          onClick={() => hubId && downloadProvisionScript(hubId)}
-        >
-          Download Setup Script
-        </button>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            className="form-select"
+            value={piArch}
+            onChange={(e) => setPiArch(e.target.value)}
+            style={{ width: 'auto' }}
+            title="Select your Raspberry Pi model"
+          >
+            <option value="armv6">Pi Zero / Pi 1 (ARMv6)</option>
+            <option value="armv7">Pi 2 / Pi 3 32-bit (ARMv7)</option>
+            <option value="arm64">Pi 3 / Pi 4 / Pi 5 64-bit (ARM64)</option>
+          </select>
+          <button
+            className="btn btn-outline"
+            onClick={() => hubId && downloadProvisionScript(hubId, piArch)}
+          >
+            Download Setup Script
+          </button>
+          <button
+            className="btn btn-ghost"
+            onClick={() => setShowSetupSteps((v) => !v)}
+            title="Show setup instructions"
+          >
+            {showSetupSteps ? 'Hide Guide' : 'How to'}
+          </button>
+          <button
+            className="btn btn-danger"
+            onClick={async () => {
+              if (!hubId || !hub) return
+              if (!confirm(`Delete "${hub.name}"?\n\nThis will permanently delete the hub and all its sensor nodes. This cannot be undone.`)) return
+              try {
+                await apiDeleteHub(hubId)
+                navigate('/')
+              } catch (err) {
+                alert(err instanceof Error ? err.message : 'Failed to delete hub')
+              }
+            }}
+          >
+            Delete Hub
+          </button>
+        </div>
       </div>
+
+      {/* Setup instructions */}
+      {showSetupSteps && <div className="setup-steps card">
+        <div className="setup-steps-title">How to set up a Raspberry Pi hub</div>
+        <ol className="setup-steps-list">
+          <li>Select your Pi model from the dropdown above, then click <strong>Download Setup Script</strong></li>
+          <li>Copy the script to your Pi:<br/><code>scp farm-setup.sh pi@&lt;pi-ip&gt;:~/</code></li>
+          <li>SSH in and run it as root:<br/><code>ssh pi@&lt;pi-ip&gt;</code><br/><code>sudo bash farm-setup.sh</code></li>
+          <li>If the script says <em>"SPI was just enabled — reboot required"</em>, run <code>sudo reboot</code> and the daemon will start on its own</li>
+          <li>Verify it&apos;s running:<br/><code>journalctl -u farmsense-hub -f</code></li>
+        </ol>
+        <div className="setup-lora-note">
+          <strong>LoRa HAT defaults</strong> (SX1262): RESET=GPIO22 · BUSY=GPIO23 · DIO1=GPIO6 · 915 MHz · SF7 · BW125.
+          Edit <code>/etc/farmsense/config.env</code> if your HAT uses different pins, then <code>sudo systemctl restart farmsense-hub</code>.
+        </div>
+      </div>}
 
       {/* Hub summary card (reuse) */}
       <div className="hub-summary-wrap">
@@ -165,7 +236,18 @@ export default function HubDetail() {
         ) : (
           <div className="nodes-grid">
             {nodes.map((node) => (
-              <NodeCard key={node.id} node={node} />
+              <NodeCard
+                key={node.id}
+                node={node}
+                onDelete={async () => {
+                  try {
+                    await apiDeleteNode(node.id)
+                    setNodes((prev) => prev.filter((n) => n.id !== node.id))
+                  } catch (err) {
+                    alert(err instanceof Error ? err.message : 'Failed to delete node')
+                  }
+                }}
+              />
             ))}
           </div>
         )}
@@ -192,46 +274,66 @@ export default function HubDetail() {
       {/* Add Node Modal */}
       {showAddNode && (
         <AddModal
-          title="Add Sensor Node"
-          onClose={() => { setShowAddNode(false); setAddNodeError(null) }}
-          onSubmit={handleAddNode}
+          title={newNodeId ? 'Node Created' : 'Add Sensor Node'}
+          onClose={closeAddNode}
+          onSubmit={newNodeId ? (e) => { e.preventDefault(); closeAddNode() } : handleAddNode}
           submitting={addingNode}
           error={addNodeError}
-          submitLabel="Add Node"
+          submitLabel={newNodeId ? 'Done' : 'Add Node'}
         >
-          <div className="form-group">
-            <label className="form-label">Node name</label>
-            <input
-              type="text"
-              className="form-input"
-              value={nodeName}
-              onChange={(e) => setNodeName(e.target.value)}
-              required
-              placeholder="Tree A Dendrometer"
-            />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Sensor type</label>
-            <select
-              className="form-select"
-              value={nodeSensorType}
-              onChange={(e) => handleSensorTypeChange(e.target.value as SensorType)}
-            >
-              {SENSOR_TYPES.map((st) => (
-                <option key={st} value={st}>{SENSOR_LABELS[st]}</option>
-              ))}
-            </select>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Unit</label>
-            <input
-              type="text"
-              className="form-input"
-              value={nodeUnit}
-              onChange={(e) => setNodeUnit(e.target.value)}
-              placeholder="mm"
-            />
-          </div>
+          {newNodeId ? (
+            <div className="node-created">
+              <div className="node-created-check">✓</div>
+              <p className="node-created-desc">
+                Copy this Node ID and paste it into your ESP32 firmware config:
+              </p>
+              <div className="node-id-row">
+                <code className="node-id">{newNodeId}</code>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={copyNodeId}>
+                  {copiedNodeId ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+              <p className="node-created-hint">
+                In the serial monitor: <code>set node_id {newNodeId}</code>
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="form-group">
+                <label className="form-label">Node name</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={nodeName}
+                  onChange={(e) => setNodeName(e.target.value)}
+                  required
+                  placeholder="Tree A Dendrometer"
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Sensor type</label>
+                <select
+                  className="form-select"
+                  value={nodeSensorType}
+                  onChange={(e) => handleSensorTypeChange(e.target.value as SensorType)}
+                >
+                  {SENSOR_TYPES.map((st) => (
+                    <option key={st} value={st}>{SENSOR_LABELS[st]}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Unit</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={nodeUnit}
+                  onChange={(e) => setNodeUnit(e.target.value)}
+                  placeholder="mm"
+                />
+              </div>
+            </>
+          )}
         </AddModal>
       )}
     </Layout>

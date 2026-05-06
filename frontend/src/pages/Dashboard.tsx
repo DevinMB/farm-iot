@@ -7,40 +7,16 @@ import AddModal from '../components/AddModal'
 import {
   apiFarms,
   apiCreateFarm,
+  apiDeleteFarm,
   apiFarmStats,
   apiFarmHubs,
   apiCreateHub,
-  apiCreateNode,
+  apiFarmMembers,
+  apiAddFarmMember,
+  apiRemoveFarmMember,
   downloadProvisionScript,
 } from '../api/client'
-import type { Farm, Hub, FarmStats, SensorType } from '../types'
-
-const SENSOR_TYPES: SensorType[] = [
-  'dendrometer',
-  'soil_moisture',
-  'temperature',
-  'solar',
-  'camera',
-  'other',
-]
-
-const SENSOR_LABELS: Record<SensorType, string> = {
-  dendrometer: 'Dendrometer',
-  soil_moisture: 'Soil Moisture',
-  temperature: 'Temperature',
-  solar: 'Solar',
-  camera: 'Camera',
-  other: 'Other',
-}
-
-const DEFAULT_UNITS: Record<SensorType, string> = {
-  dendrometer: 'mm',
-  soil_moisture: '%',
-  temperature: '°C',
-  solar: 'W/m²',
-  camera: '',
-  other: '',
-}
+import type { Farm, FarmMember, Hub, FarmStats } from '../types'
 
 export default function Dashboard() {
   const { user } = useAuth()
@@ -69,16 +45,15 @@ export default function Dashboard() {
 
   // Pi builder
   const [provisionHubId, setProvisionHubId] = useState<string>('')
+  const [provisionArch, setProvisionArch] = useState<string>('armv6')
 
-  // ESP32 node builder
-  const [esp32HubId, setEsp32HubId] = useState<string>('')
-  const [esp32SensorType, setEsp32SensorType] = useState<SensorType>('temperature')
-  const [esp32NodeName, setEsp32NodeName] = useState('')
-  const [esp32Unit, setEsp32Unit] = useState(DEFAULT_UNITS['temperature'])
-  const [registeringNode, setRegisteringNode] = useState(false)
-  const [registeredNodeId, setRegisteredNodeId] = useState<string | null>(null)
-  const [esp32Error, setEsp32Error] = useState<string | null>(null)
-  const [copiedNodeId, setCopiedNodeId] = useState(false)
+  // Farm settings modal
+  const [showFarmSettings, setShowFarmSettings] = useState(false)
+  const [farmMembers, setFarmMembers] = useState<FarmMember[]>([])
+  const [loadingMembers, setLoadingMembers] = useState(false)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviting, setInviting] = useState(false)
+  const [inviteError, setInviteError] = useState<string | null>(null)
 
   // Load farms
   useEffect(() => {
@@ -107,10 +82,8 @@ export default function Dashboard() {
         setStats(statsRes)
         if (hubsRes.hubs.length > 0) {
           setProvisionHubId(hubsRes.hubs[0].id)
-          setEsp32HubId(hubsRes.hubs[0].id)
         } else {
           setProvisionHubId('')
-          setEsp32HubId('')
         }
         setLoadingHubs(false)
       })
@@ -149,7 +122,6 @@ export default function Dashboard() {
       const hub = await apiCreateHub(selectedFarmId, hubName)
       setHubs((prev) => [...prev, hub])
       if (!provisionHubId) setProvisionHubId(hub.id)
-      if (!esp32HubId) setEsp32HubId(hub.id)
       setShowAddHub(false)
       setHubName('')
     } catch (err: unknown) {
@@ -159,34 +131,56 @@ export default function Dashboard() {
     }
   }
 
-  async function handleRegisterNode(e: FormEvent) {
+
+  function openFarmSettings() {
+    if (!selectedFarmId) return
+    setShowFarmSettings(true)
+    setLoadingMembers(true)
+    setInviteError(null)
+    setInviteEmail('')
+    apiFarmMembers(selectedFarmId)
+      .then((res) => { setFarmMembers(res.members); setLoadingMembers(false) })
+      .catch(() => setLoadingMembers(false))
+  }
+
+  async function handleInvite(e: FormEvent) {
     e.preventDefault()
-    if (!esp32HubId) return
-    setEsp32Error(null)
-    setRegisteringNode(true)
-    setRegisteredNodeId(null)
+    if (!selectedFarmId) return
+    setInviteError(null)
+    setInviting(true)
     try {
-      const node = await apiCreateNode(esp32HubId, esp32NodeName, esp32SensorType, esp32Unit)
-      setRegisteredNodeId(node.id)
-      setEsp32NodeName('')
+      const member = await apiAddFarmMember(selectedFarmId, inviteEmail)
+      setFarmMembers((prev) => [...prev, member])
+      setInviteEmail('')
     } catch (err: unknown) {
-      setEsp32Error(err instanceof Error ? err.message : 'Failed to register node')
+      setInviteError(err instanceof Error ? err.message : 'Failed to invite member')
     } finally {
-      setRegisteringNode(false)
+      setInviting(false)
     }
   }
 
-  function handleSensorTypeChange(st: SensorType) {
-    setEsp32SensorType(st)
-    setEsp32Unit(DEFAULT_UNITS[st])
+  async function handleRemoveMember(userId: string) {
+    if (!selectedFarmId) return
+    try {
+      await apiRemoveFarmMember(selectedFarmId, userId)
+      setFarmMembers((prev) => prev.filter((m) => m.user_id !== userId))
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to remove member')
+    }
   }
 
-  function copyNodeId() {
-    if (!registeredNodeId) return
-    navigator.clipboard.writeText(registeredNodeId).then(() => {
-      setCopiedNodeId(true)
-      setTimeout(() => setCopiedNodeId(false), 2000)
-    })
+  async function handleDeleteFarm() {
+    if (!selectedFarmId || !selectedFarm) return
+    if (!confirm(`Delete "${selectedFarm.name}"?\n\nThis will permanently delete the farm, all its hubs, and all sensor nodes. This cannot be undone.`)) return
+    try {
+      await apiDeleteFarm(selectedFarmId)
+      const remaining = farms.filter((f) => f.id !== selectedFarmId)
+      setFarms(remaining)
+      setSelectedFarmId(remaining.length > 0 ? remaining[0].id : null)
+      setShowFarmSettings(false)
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to delete farm')
+    }
   }
 
   if (loadingFarms) {
@@ -275,20 +269,28 @@ export default function Dashboard() {
       </div>
 
       <div className="dashboard-body">
-        {/* Farm selector */}
-        {farms.length > 1 && (
-          <div className="farm-tabs">
-            {farms.map((f) => (
-              <button
-                key={f.id}
-                className={`farm-tab ${f.id === selectedFarmId ? 'active' : ''}`}
-                onClick={() => setSelectedFarmId(f.id)}
-              >
-                {f.name}
-              </button>
-            ))}
-          </div>
-        )}
+        {/* Farm selector + settings */}
+        <div className="farm-tabs-row">
+          {farms.length > 1 && (
+            <div className="farm-tabs">
+              {farms.map((f) => (
+                <button
+                  key={f.id}
+                  className={`farm-tab ${f.id === selectedFarmId ? 'active' : ''}`}
+                  onClick={() => setSelectedFarmId(f.id)}
+                >
+                  {f.name}
+                  {!f.owned && <span className="farm-tab-shared" title="Shared with you">↗</span>}
+                </button>
+              ))}
+            </div>
+          )}
+          {selectedFarmId && (
+            <button className="btn btn-ghost btn-sm farm-settings-btn" onClick={openFarmSettings} title="Farm settings">
+              ⚙ Manage Farm
+            </button>
+          )}
+        </div>
 
         {/* Stats row */}
         {stats && (
@@ -362,9 +364,19 @@ export default function Dashboard() {
                     <option key={h.id} value={h.id}>{h.name}</option>
                   ))}
                 </select>
+                <select
+                  className="form-select"
+                  value={provisionArch}
+                  onChange={(e) => setProvisionArch(e.target.value)}
+                  title="Select your Raspberry Pi model"
+                >
+                  <option value="armv6">Pi Zero / Pi 1 (ARMv6)</option>
+                  <option value="armv7">Pi 2 / Pi 3 32-bit (ARMv7)</option>
+                  <option value="arm64">Pi 3 / Pi 4 / Pi 5 64-bit (ARM64)</option>
+                </select>
                 <button
                   className="btn btn-primary"
-                  onClick={() => provisionHubId && downloadProvisionScript(provisionHubId)}
+                  onClick={() => provisionHubId && downloadProvisionScript(provisionHubId, provisionArch)}
                   disabled={!provisionHubId}
                 >
                   Download Setup Script
@@ -374,102 +386,6 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ESP32 section */}
-        <div className="section">
-          <div className="card esp32-builder">
-            <h2 className="section-title">⚡ Add an ESP32 Sensor Node</h2>
-            <p className="section-desc">
-              Register a sensor node, then flash your ESP32 with FarmSense firmware and enter the
-              Node ID when prompted.
-            </p>
-            {hubs.length === 0 ? (
-              <p className="muted-text">Add a hub first before registering sensor nodes.</p>
-            ) : (
-              <>
-                <form onSubmit={handleRegisterNode} className="esp32-form">
-                  <div className="esp32-steps">
-                    <div className="esp32-step">
-                      <div className="step-num">1</div>
-                      <div className="form-group">
-                        <label className="form-label">Select Hub</label>
-                        <select
-                          className="form-select"
-                          value={esp32HubId}
-                          onChange={(e) => setEsp32HubId(e.target.value)}
-                        >
-                          {hubs.map((h) => (
-                            <option key={h.id} value={h.id}>{h.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                    <div className="esp32-step">
-                      <div className="step-num">2</div>
-                      <div className="form-group">
-                        <label className="form-label">Sensor Type</label>
-                        <select
-                          className="form-select"
-                          value={esp32SensorType}
-                          onChange={(e) => handleSensorTypeChange(e.target.value as SensorType)}
-                        >
-                          {SENSOR_TYPES.map((st) => (
-                            <option key={st} value={st}>{SENSOR_LABELS[st]}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                    <div className="esp32-step">
-                      <div className="step-num">3</div>
-                      <div className="form-group">
-                        <label className="form-label">Node Name</label>
-                        <input
-                          type="text"
-                          className="form-input"
-                          value={esp32NodeName}
-                          onChange={(e) => setEsp32NodeName(e.target.value)}
-                          required
-                          placeholder="Tree A Dendrometer"
-                        />
-                      </div>
-                    </div>
-                    <div className="esp32-step">
-                      <div className="step-num">4</div>
-                      <div className="form-group">
-                        <label className="form-label">Unit</label>
-                        <input
-                          type="text"
-                          className="form-input"
-                          value={esp32Unit}
-                          onChange={(e) => setEsp32Unit(e.target.value)}
-                          placeholder="mm"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  {esp32Error && <div className="form-error">{esp32Error}</div>}
-                  <button type="submit" className="btn btn-primary" disabled={registeringNode}>
-                    {registeringNode ? 'Registering…' : 'Register Node'}
-                  </button>
-                </form>
-
-                {registeredNodeId && (
-                  <div className="node-registered">
-                    <div className="node-registered-title">Node registered!</div>
-                    <p className="node-registered-desc">
-                      Flash your ESP32 with FarmSense firmware and enter this Node ID when prompted:
-                    </p>
-                    <div className="node-id-row">
-                      <code className="node-id">{registeredNodeId}</code>
-                      <button className="btn btn-ghost" onClick={copyNodeId}>
-                        {copiedNodeId ? 'Copied!' : 'Copy'}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        </div>
       </div>
 
       {/* Modals */}
@@ -528,6 +444,77 @@ export default function Dashboard() {
             />
           </div>
         </AddModal>
+      )}
+
+      {/* Farm Settings Modal */}
+      {showFarmSettings && selectedFarm && (
+        <div className="modal-backdrop" onClick={() => setShowFarmSettings(false)}>
+          <div className="modal farm-settings-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title">{selectedFarm.name} — Settings</h2>
+              <button className="modal-close" onClick={() => setShowFarmSettings(false)}>✕</button>
+            </div>
+
+            <div className="modal-body">
+              {/* Members section */}
+              <div className="settings-section">
+                <h3 className="settings-section-title">Members</h3>
+                {loadingMembers ? (
+                  <p className="muted-text">Loading…</p>
+                ) : farmMembers.length === 0 ? (
+                  <p className="muted-text">No shared members yet.</p>
+                ) : (
+                  <ul className="members-list">
+                    {farmMembers.map((m) => (
+                      <li key={m.user_id} className="member-row">
+                        <div className="member-info">
+                          <span className="member-name">{m.name}</span>
+                          <span className="member-email">{m.email}</span>
+                        </div>
+                        {selectedFarm.owned && (
+                          <button
+                            className="btn btn-danger-sm"
+                            onClick={() => handleRemoveMember(m.user_id)}
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {selectedFarm.owned && (
+                  <form onSubmit={handleInvite} className="invite-form">
+                    <input
+                      type="email"
+                      className="form-input"
+                      placeholder="Enter email address to invite"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      required
+                    />
+                    {inviteError && <div className="form-error">{inviteError}</div>}
+                    <button type="submit" className="btn btn-primary" disabled={inviting}>
+                      {inviting ? 'Inviting…' : 'Invite'}
+                    </button>
+                  </form>
+                )}
+              </div>
+
+              {/* Danger zone — owner only */}
+              {selectedFarm.owned && (
+                <div className="settings-section danger-zone">
+                  <h3 className="settings-section-title danger-title">Danger Zone</h3>
+                  <p className="muted-text">Permanently delete this farm and all its hubs and sensor nodes.</p>
+                  <button className="btn btn-danger" onClick={handleDeleteFarm}>
+                    Delete Farm
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </Layout>
   )

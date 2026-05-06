@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS nodes (
     last_seen TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS farm_members (
+    farm_id    UUID NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    invited_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (farm_id, user_id)
+);
 `
 
 // New creates a new pgxpool connection pool and runs schema migrations.

@@ -44,8 +44,9 @@ func main() {
 
 	authHandler := handlers.NewAuthHandler(pool, cfg.JWTSecret)
 	farmHandler := handlers.NewFarmHandler(pool)
-	hubHandler := handlers.NewHubHandler(pool)
+	hubHandler := handlers.NewHubHandler(pool, cfg.Vault, cfg.Domain)
 	nodeHandler := handlers.NewNodeHandler(pool, cfg.InfluxURL, cfg.InfluxToken, cfg.InfluxOrg, cfg.InfluxBucket)
+	hubAPIHandler := handlers.NewHubAPIHandler(pool, cfg.JWTSecret, cfg.InfluxURL, cfg.InfluxToken, cfg.InfluxOrg, cfg.InfluxBucket)
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
@@ -78,6 +79,32 @@ func main() {
 		r.Post("/auth/register", authHandler.Register)
 		r.Post("/auth/login", authHandler.Login)
 
+		// Hub device routes
+		r.Post("/hub/auth", hubAPIHandler.Auth)
+		r.Group(func(r chi.Router) {
+			r.Use(authmw.HubJWTMiddleware(cfg.JWTSecret))
+			r.Post("/hub/heartbeat", hubAPIHandler.Heartbeat)
+			r.Post("/hub/readings", hubAPIHandler.Readings)
+			r.Get("/hub/nodes", hubAPIHandler.ListNodes)
+		})
+
+		// Serve hub daemon binary for Pi provisioning (?arch=armv6|armv7|arm64)
+		r.Get("/hub/daemon", func(w http.ResponseWriter, r *http.Request) {
+			arch := r.URL.Query().Get("arch")
+			var path string
+			switch arch {
+			case "arm64":
+				path = "/app/hub-daemon-arm64"
+			case "armv7":
+				path = "/app/hub-daemon-armv7"
+			default: // armv6 — Pi Zero / Pi 1
+				path = "/app/hub-daemon-armv6"
+			}
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Disposition", `attachment; filename="farmsense-hub"`)
+			http.ServeFile(w, r, path)
+		})
+
 		// Protected routes
 		r.Group(func(r chi.Router) {
 			r.Use(authmw.JWTMiddleware(cfg.JWTSecret))
@@ -85,15 +112,21 @@ func main() {
 			r.Get("/farms", farmHandler.List)
 			r.Post("/farms", farmHandler.Create)
 			r.Get("/farms/{farmId}", farmHandler.Get)
+			r.Delete("/farms/{farmId}", farmHandler.Delete)
 			r.Get("/farms/{farmId}/stats", farmHandler.Stats)
+			r.Get("/farms/{farmId}/members", farmHandler.ListMembers)
+			r.Post("/farms/{farmId}/members", farmHandler.AddMember)
+			r.Delete("/farms/{farmId}/members/{userId}", farmHandler.RemoveMember)
 			r.Get("/farms/{farmId}/hubs", hubHandler.List)
 			r.Post("/farms/{farmId}/hubs", hubHandler.Create)
 
 			r.Get("/hubs/{hubId}", hubHandler.Get)
+			r.Delete("/hubs/{hubId}", hubHandler.Delete)
 			r.Get("/hubs/{hubId}/provision", hubHandler.Provision)
 			r.Get("/hubs/{hubId}/nodes", nodeHandler.List)
 			r.Post("/hubs/{hubId}/nodes", nodeHandler.Create)
 
+			r.Delete("/nodes/{nodeId}", nodeHandler.Delete)
 			r.Get("/nodes/{nodeId}/readings", nodeHandler.Readings)
 		})
 	})

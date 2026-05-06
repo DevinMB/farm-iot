@@ -10,6 +10,15 @@ export interface Farm {
   name: string
   location: string
   created_at: string
+  owned: boolean
+}
+
+export interface FarmMember {
+  user_id: string
+  email: string
+  name: string
+  invited_by: string
+  created_at: string
 }
 
 export interface Hub {

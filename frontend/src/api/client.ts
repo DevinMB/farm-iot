@@ -1,4 +1,4 @@
-import type { Farm, Hub, Node, Reading, FarmStats, User } from '../types'
+import type { Farm, FarmMember, Hub, Node, Reading, FarmStats, User } from '../types'
 
 const BASE = '/api'
 const TOKEN_KEY = 'farmsense_token'
@@ -118,9 +118,79 @@ export async function apiCreateNode(
   return handleResponse(res)
 }
 
-export function downloadProvisionScript(hubId: string): void {
+export async function apiDeleteFarm(farmId: string): Promise<void> {
+  const res = await fetch(`${BASE}/farms/${farmId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`
+    try { const b = (await res.json()) as { error?: string }; if (b.error) message = b.error } catch { /* ignore */ }
+    throw new Error(message)
+  }
+}
+
+export async function apiFarmMembers(farmId: string): Promise<{ members: FarmMember[] }> {
+  const res = await fetch(`${BASE}/farms/${farmId}/members`, { headers: authHeaders() })
+  return handleResponse<{ members: FarmMember[] }>(res)
+}
+
+export async function apiAddFarmMember(farmId: string, email: string): Promise<FarmMember> {
+  const res = await fetch(`${BASE}/farms/${farmId}/members`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ email }),
+  })
+  return handleResponse<FarmMember>(res)
+}
+
+export async function apiRemoveFarmMember(farmId: string, userId: string): Promise<void> {
+  const res = await fetch(`${BASE}/farms/${farmId}/members/${userId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`
+    try { const b = (await res.json()) as { error?: string }; if (b.error) message = b.error } catch { /* ignore */ }
+    throw new Error(message)
+  }
+}
+
+export async function apiDeleteNode(nodeId: string): Promise<void> {
+  const res = await fetch(`${BASE}/nodes/${nodeId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body.error) message = body.error
+    } catch { /* ignore */ }
+    throw new Error(message)
+  }
+}
+
+export async function apiDeleteHub(hubId: string): Promise<void> {
+  const res = await fetch(`${BASE}/hubs/${hubId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body.error) message = body.error
+    } catch { /* ignore */ }
+    throw new Error(message)
+  }
+}
+
+export function downloadProvisionScript(hubId: string, arch: string): void {
   const token = getToken()
-  const url = `${BASE}/hubs/${hubId}/provision${token ? `?token=${encodeURIComponent(token)}` : ''}`
+  const params = new URLSearchParams({ arch })
+  if (token) params.set('token', token)
+  const url = `${BASE}/hubs/${hubId}/provision?${params.toString()}`
   // Use fetch + blob to trigger download with auth header
   fetch(url, { headers: authHeaders() })
     .then(async (res) => {

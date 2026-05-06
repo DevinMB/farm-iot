@@ -53,6 +53,38 @@ func (c *Client) GetKV(ctx context.Context, path string) (map[string]interface{}
 	return s.Data, nil
 }
 
+// CreateHubCredentials fetches the hub-role role_id and generates a fresh secret_id.
+// The API's Vault policy must allow read on hub-role/role-id and create on hub-role/secret-id.
+func (c *Client) CreateHubCredentials(ctx context.Context) (roleID, secretID string, err error) {
+	roleSecret, err := c.v.Logical().ReadWithContext(ctx, "auth/approle/role/hub-role/role-id")
+	if err != nil {
+		return "", "", fmt.Errorf("vault hub role-id: %w", err)
+	}
+	roleID, _ = roleSecret.Data["role_id"].(string)
+
+	sidSecret, err := c.v.Logical().WriteWithContext(ctx, "auth/approle/role/hub-role/secret-id", nil)
+	if err != nil {
+		return "", "", fmt.Errorf("vault hub secret-id: %w", err)
+	}
+	secretID, _ = sidSecret.Data["secret_id"].(string)
+
+	return roleID, secretID, nil
+}
+
+// ValidateHubCredentials attempts an AppRole login with the given role_id/secret_id.
+// Returns nil if login succeeds (credentials are valid), error otherwise.
+// The resulting Vault token is discarded — we only care about validity.
+func (c *Client) ValidateHubCredentials(ctx context.Context, roleID, secretID string) error {
+	_, err := c.v.Logical().WriteWithContext(ctx, "auth/approle/login", map[string]interface{}{
+		"role_id":   roleID,
+		"secret_id": secretID,
+	})
+	if err != nil {
+		return fmt.Errorf("vault approle login validation: %w", err)
+	}
+	return nil
+}
+
 // GetDBCreds fetches dynamic Postgres credentials from the database secrets engine.
 func (c *Client) GetDBCreds(ctx context.Context, role string) (username, password string, err error) {
 	s, err := c.v.Logical().ReadWithContext(ctx, "database/creds/"+role)

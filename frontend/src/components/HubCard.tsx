@@ -3,6 +3,7 @@ import type { Hub } from '../types'
 interface HubCardProps {
   hub: Hub
   onClick?: () => void
+  onDelete?: () => void
 }
 
 function formatLastSeen(ts: string | null): string {
@@ -16,7 +17,7 @@ function formatLastSeen(ts: string | null): string {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
-export default function HubCard({ hub, onClick }: HubCardProps) {
+export default function HubCard({ hub, onClick, onDelete }: HubCardProps) {
   const nodeCount = hub.nodes?.length ?? 0
 
   return (
@@ -37,9 +38,18 @@ export default function HubCard({ hub, onClick }: HubCardProps) {
           <span className="hub-card-stat-value">{formatLastSeen(hub.last_seen)}</span>
         </div>
       </div>
-      {onClick && (
+      {(onClick || onDelete) && (
         <div className="hub-card-footer">
-          <span className="hub-card-link">View details →</span>
+          {onClick && <span className="hub-card-link">View details →</span>}
+          {onDelete && (
+            <button
+              className="btn-danger-sm"
+              onClick={(e) => { e.stopPropagation(); onDelete() }}
+              aria-label="Delete hub"
+            >
+              Delete
+            </button>
+          )}
         </div>
       )}
     </div>
