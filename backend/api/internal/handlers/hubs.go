@@ -265,6 +265,13 @@ if [ -n "$CONFIG_FILE" ]; then
     else
         echo "==> SPI already enabled"
     fi
+    # spi0-0cs: disable kernel-managed CE0/CE1 — Waveshare HAT uses BCM21 as
+    # software-driven CS, and kernel CS toggling on BCM8 can interfere.
+    if ! grep -q "^dtoverlay=spi0-0cs" "$CONFIG_FILE"; then
+        echo "dtoverlay=spi0-0cs" >> "$CONFIG_FILE"
+        echo "==> spi0-0cs overlay added (reboot required)"
+        REBOOT_NEEDED=true
+    fi
 fi
 
 # Write config (values embedded at generation time, not shell variables)
@@ -279,10 +286,16 @@ API_URL=http://api.%s
 # ── LoRa HAT (SX1262) ──────────────────────────────────────────────────────
 LORA_ENABLED=true
 LORA_SPI_DEV=/dev/spidev0.0
-# GPIO pin numbers (BCM). Adjust if your HAT uses different pins.
-LORA_RESET_PIN=22
-LORA_BUSY_PIN=23
-LORA_DIO1_PIN=6
+# GPIO pin numbers (BCM) — defaults match Waveshare SX1262 LoRaWAN Node.
+# Adjust if your HAT uses different pins.
+LORA_RESET_PIN=18
+LORA_BUSY_PIN=20
+LORA_DIO1_PIN=16
+LORA_CS_PIN=21
+# LORA_RXEN_PIN intentionally unset — DIO2_AS_RF_SWITCH handles the RF SPDT switch
+# on the Waveshare SX1262 LoRaWAN/GNSS HAT. Driving BCM6 manually conflicts with
+# the chip's internal RF switch control. Re-enable only if you have a board
+# variant that requires explicit RXEN/TXEN control.
 # Radio parameters — must match your ESP32 firmware
 LORA_FREQ_HZ=915000000
 LORA_SF=7
@@ -294,7 +307,11 @@ echo "==> Config written to /etc/farmsense/config.env"
 
 # Download hub daemon binary (%s)
 echo "==> Downloading hub daemon..."
-curl -fsSL "$API_URL/api/hub/daemon?arch=%s" -o /usr/local/bin/farmsense-hub
+# Stop the service if running so the binary is not locked during update
+systemctl stop farmsense-hub 2>/dev/null || true
+# Download to temp file first, then move atomically to avoid partial-write issues
+curl -fsSL "$API_URL/api/hub/daemon?arch=%s" -o /tmp/farmsense-hub-new
+mv /tmp/farmsense-hub-new /usr/local/bin/farmsense-hub
 chmod +x /usr/local/bin/farmsense-hub
 echo "==> Daemon installed at /usr/local/bin/farmsense-hub"
 

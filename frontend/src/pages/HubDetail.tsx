@@ -6,6 +6,7 @@ import NodeCard from '../components/NodeCard'
 import SensorChart from '../components/SensorChart'
 import AddModal from '../components/AddModal'
 import { apiHub, apiHubNodes, apiCreateNode, apiDeleteNode, apiDeleteHub, downloadProvisionScript } from '../api/client'
+import FlashESP32 from '../components/FlashESP32'
 import type { Hub, Node, SensorType } from '../types'
 
 const SENSOR_TYPES: SensorType[] = [
@@ -209,7 +210,7 @@ export default function HubDetail() {
           <li>Verify it&apos;s running:<br/><code>journalctl -u farmsense-hub -f</code></li>
         </ol>
         <div className="setup-lora-note">
-          <strong>LoRa HAT defaults</strong> (SX1262): RESET=GPIO22 · BUSY=GPIO23 · DIO1=GPIO6 · 915 MHz · SF7 · BW125.
+          <strong>LoRa HAT defaults</strong> (Waveshare SX1262): RESET=GPIO18 · BUSY=GPIO20 · DIO1=GPIO16 · CS=GPIO21 · RXEN=GPIO6 · 915 MHz · SF7 · BW125.
           Edit <code>/etc/farmsense/config.env</code> if your HAT uses different pins, then <code>sudo systemctl restart farmsense-hub</code>.
         </div>
       </div>}
@@ -284,9 +285,9 @@ export default function HubDetail() {
           {newNodeId ? (
             <div className="node-created">
               <div className="node-created-check">✓</div>
-              <p className="node-created-desc">
-                Copy this Node ID and paste it into your ESP32 firmware config:
-              </p>
+              <p className="node-created-desc">Node created — flash your ESP32 to configure it:</p>
+              <FlashESP32 nodeId={newNodeId} />
+              <div className="node-created-divider">or configure manually</div>
               <div className="node-id-row">
                 <code className="node-id">{newNodeId}</code>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={copyNodeId}>
@@ -294,7 +295,7 @@ export default function HubDetail() {
                 </button>
               </div>
               <p className="node-created-hint">
-                In the serial monitor: <code>set node_id {newNodeId}</code>
+                Serial monitor: <code>set node_id {newNodeId}</code>
               </p>
             </div>
           ) : (

@@ -1,7 +1,10 @@
 #pragma once
 
 // ── I2C (ADS1115) ─────────────────────────────────────────────────────────
-#if defined(BOARD_HELTEC_V2)
+#if defined(BOARD_HELTEC_V3)
+  #define PIN_SDA  17
+  #define PIN_SCL  18
+#elif defined(BOARD_HELTEC_V2)
   #define PIN_SDA   4
   #define PIN_SCL  15
 #elif defined(BOARD_TTGO_V1)
@@ -18,20 +21,33 @@
 #define ADS_CHANNEL   0
 
 // ── LoRa pins ─────────────────────────────────────────────────────────────
-#if defined(BOARD_HELTEC_V2)
+#if defined(BOARD_HELTEC_V3)
+  // SX1262 on Heltec V3 (ESP32-S3) — non-default SPI bus
+  #define LORA_CS    8
+  #define LORA_RST  12
+  #define LORA_DIO1 14
+  #define LORA_BUSY 13
+  #define LORA_SCK   9
+  #define LORA_MOSI 10
+  #define LORA_MISO 11
+#elif defined(BOARD_HELTEC_V2)
+  // SX1276 on Heltec V2 (ESP32)
   #define LORA_CS   18
   #define LORA_RST  14
-  #define LORA_IRQ  26
+  #define LORA_DIO0 26
 #elif defined(BOARD_TTGO_V1)
+  // SX1276 on TTGO V1 (ESP32)
   #define LORA_CS   18
   #define LORA_RST  23
-  #define LORA_IRQ  26
+  #define LORA_DIO0 26
 #endif
 
 // 915 MHz for US
-#define LORA_FREQ     915E6
-// Spreading factor 7 = fastest, shortest range — fine within one farm
+#define LORA_FREQ_MHZ 915.0f
+// Spreading factor 7, BW 125 kHz, CR 4/5 — must match Pi hub config
 #define LORA_SF       7
+#define LORA_BW       125.0f
+#define LORA_CR       5
 
 // ── Sensor defaults ───────────────────────────────────────────────────────
 // Physical travel of the potentiometer in mm

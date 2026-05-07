@@ -18,3 +18,7 @@ infra/traefik/certs/
 .DS_Store
 Thumbs.db
 projects/
+
+# Claude Code local settings (per-user)
+.claude/
+CLAUDE.md

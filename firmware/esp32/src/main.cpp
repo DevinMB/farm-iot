@@ -1,9 +1,12 @@
 #include <Arduino.h>
-#include <Wire.h>
 #include <Preferences.h>
-#include <Adafruit_ADS1X15.h>
 #include <ArduinoJson.h>
 #include "config.h"
+
+#ifndef TEST_MODE
+#include <Wire.h>
+#include <Adafruit_ADS1X15.h>
+#endif
 
 #ifdef WIFI_MODE
 #include <WiFi.h>
@@ -13,8 +16,7 @@
 #endif
 
 #ifdef LORA_MODE
-#include <SPI.h>
-#include <LoRa.h>
+#include <RadioLib.h>
 #endif
 
 // ── Persistent config (stored in NVS flash) ───────────────────────────────
@@ -42,7 +44,11 @@ void loadConfig() {
     cfg.calZero     = prefs.getInt("cal_zero",   DEFAULT_CAL_ZERO);
     cfg.calMax      = prefs.getInt("cal_max",    DEFAULT_CAL_MAX);
     cfg.calRangeMm  = prefs.getFloat("cal_range", DEFAULT_CAL_RANGE_MM);
+#ifdef TEST_MODE
+    cfg.intervalMs  = prefs.getUInt("interval",  5000UL);  // 5s default in test mode
+#else
     cfg.intervalMs  = prefs.getUInt("interval",  DEFAULT_INTERVAL_MS);
+#endif
 #ifdef WIFI_MODE
     cfg.wifiSsid = prefs.getString("wifi_ssid", "");
     cfg.wifiPass = prefs.getString("wifi_pass", "");
@@ -69,6 +75,7 @@ void saveConfig() {
 }
 
 // ── ADS1115 ───────────────────────────────────────────────────────────────
+#ifndef TEST_MODE
 Adafruit_ADS1115 ads;
 
 bool initADS() {
@@ -77,12 +84,10 @@ bool initADS() {
     return ads.begin(ADS_I2C_ADDR);
 }
 
-// Returns raw ADC count from the potentiometer wiper
 int32_t readRaw() {
     return (int32_t)ads.readADC_SingleEnded(ADS_CHANNEL);
 }
 
-// Converts raw count to millimetres using stored calibration
 float rawToMm(int32_t raw) {
     int32_t span = cfg.calMax - cfg.calZero;
     if (span == 0) return 0.0f;
@@ -91,6 +96,13 @@ float rawToMm(int32_t raw) {
     if (mm > cfg.calRangeMm)   mm = cfg.calRangeMm;
     return mm;
 }
+#else
+// Fake sensor: slow sine wave 20–40 mm, period ~2 minutes
+float fakeReading() {
+    float t = millis() / 60000.0f;  // minutes
+    return 30.0f + 10.0f * sin(t * 2.0f * PI);
+}
+#endif
 
 // ── WiFi / HTTP mode ──────────────────────────────────────────────────────
 #ifdef WIFI_MODE
@@ -154,10 +166,31 @@ void sendReading(float mm) {
 
 // ── LoRa mode ─────────────────────────────────────────────────────────────
 #ifdef LORA_MODE
+
+#if defined(BOARD_HELTEC_V3)
+  // Heltec V3: SX1262, explicit SPI bus (non-default pins on ESP32-S3)
+  static SX1262 lora = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
+#else
+  // Heltec V2 / TTGO V1: SX1276, default SPI bus
+  static SX1276 lora = new Module(LORA_CS, LORA_DIO0, LORA_RST, RADIOLIB_NC);
+#endif
+
 bool initLoRa() {
-    LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
-    if (!LoRa.begin(LORA_FREQ)) return false;
-    LoRa.setSpreadingFactor(LORA_SF);
+#if defined(BOARD_HELTEC_V3)
+    SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
+    // 1.8V TCXO on DIO3 — required for V3
+    int state = lora.begin(LORA_FREQ_MHZ, LORA_BW, LORA_SF, LORA_CR,
+                           0x12, 22, 8, 1.8f);  // 22 dBm = max for SX1262
+#else
+    int state = lora.begin(LORA_FREQ_MHZ, LORA_BW, LORA_SF, LORA_CR);
+#endif
+    if (state != RADIOLIB_ERR_NONE) {
+        Serial.printf("[LoRa] init failed: %d\n", state);
+        return false;
+    }
+
+    Serial.printf("[LoRa] ready — %.0f MHz SF%d BW%.0fkHz CR4/%d 22dBm preamble=8\n",
+        LORA_FREQ_MHZ, LORA_SF, LORA_BW, LORA_CR);
     return true;
 }
 
@@ -170,10 +203,12 @@ void sendReading(float mm) {
         "{\"node_id\":\"%s\",\"sensor_type\":\"dendrometer\",\"value\":%.3f,\"unit\":\"mm\"}",
         cfg.nodeId.c_str(), mm);
 
-    LoRa.beginPacket();
-    LoRa.print(payload);
-    LoRa.endPacket();
-    Serial.printf("[LoRa] sent: %s\n", payload);
+    int state = lora.transmit((uint8_t*)payload, strlen(payload));
+    if (state == RADIOLIB_ERR_NONE) {
+        Serial.printf("[LoRa] sent: %s\n", payload);
+    } else {
+        Serial.printf("[LoRa] send error: %d\n", state);
+    }
 }
 #endif  // LORA_MODE
 
@@ -225,16 +260,24 @@ void handleSerialLine(String line) {
     }
 
     if (line == "cal zero") {
+#ifdef TEST_MODE
+        Serial.println("[cal] not available in TEST_MODE");
+#else
         int32_t raw = readRaw();
         cfg.calZero = raw;
         Serial.printf("[cal] zero = %d (slide fully compressed)\n", raw);
+#endif
         return;
     }
 
     if (line == "cal max") {
+#ifdef TEST_MODE
+        Serial.println("[cal] not available in TEST_MODE");
+#else
         int32_t raw = readRaw();
         cfg.calMax = raw;
         Serial.printf("[cal] max = %d (slide fully extended)\n", raw);
+#endif
         return;
     }
 
@@ -272,9 +315,13 @@ void handleSerialLine(String line) {
     }
 
     if (line == "read") {
+#ifdef TEST_MODE
+        Serial.printf("[TEST] fake reading: %.3f mm\n", fakeReading());
+#else
         int32_t raw = readRaw();
         float mm = rawToMm(raw);
         Serial.printf("[sensor] raw=%d  mm=%.3f\n", raw, mm);
+#endif
         return;
     }
 
@@ -288,10 +335,13 @@ void setup() {
 
     loadConfig();
 
+#ifdef TEST_MODE
+    Serial.println("[TEST MODE] fake sensor data — no ADS1115 needed");
+#else
     if (!initADS()) {
         Serial.println("[ERROR] ADS1115 not found — check wiring (SDA/SCL, 3.3V, ADDR pin)");
-        // Don't halt — still allow serial config
     }
+#endif
 
     // Enter config mode if node_id is blank or user sends a character within 3s
     if (cfg.nodeId.isEmpty()) {
@@ -314,6 +364,7 @@ void setup() {
             }
         }
     }
+
 
     if (!configMode) {
 #ifdef WIFI_MODE
@@ -351,9 +402,14 @@ void loop() {
     uint32_t now = millis();
     if (now - lastReadAt >= cfg.intervalMs) {
         lastReadAt = now;
+#ifdef TEST_MODE
+        float mm = fakeReading();
+        Serial.printf("[TEST] fake reading: %.3f mm\n", mm);
+#else
         int32_t raw = readRaw();
         float mm    = rawToMm(raw);
         Serial.printf("[sensor] raw=%d  mm=%.3f\n", raw, mm);
+#endif
         sendReading(mm);
     }
 }

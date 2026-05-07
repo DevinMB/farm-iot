@@ -32,13 +32,17 @@ type Config struct {
 	// LoRa (optional — zero values mean LoRa disabled)
 	LoRaEnabled bool
 	LoRaSPIDev  string
+	LoRaSPIHz   uint32
 	LoRaReset   string
 	LoRaBusy    string
 	LoRaDIO1    string
+	LoRaCSPin   string  // software CS GPIO; empty = rely on kernel hardware CE
+	LoRaRXEnPin string  // board RXEN GPIO for RF switch; empty = not used
 	LoRaFreqHz  uint32
 	LoRaSF      byte
 	LoRaBWCode  byte
 	LoRaCR      byte
+	LoRaTCXO    float64 // TCXO voltage; 0 = use crystal
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -77,13 +81,20 @@ func loadConfig(path string) (*Config, error) {
 	cfg.LoRaEnabled = strings.ToLower(m["LORA_ENABLED"]) == "true"
 	if cfg.LoRaEnabled {
 		cfg.LoRaSPIDev = orDefault(m["LORA_SPI_DEV"], "/dev/spidev0.0")
-		cfg.LoRaReset = orDefault(m["LORA_RESET_PIN"], "22")
-		cfg.LoRaBusy = orDefault(m["LORA_BUSY_PIN"], "23")
-		cfg.LoRaDIO1 = orDefault(m["LORA_DIO1_PIN"], "6")
+		cfg.LoRaSPIHz = parseUint32(m["LORA_SPI_HZ"], 2000000) // 2 MHz default
+		cfg.LoRaReset = orDefault(m["LORA_RESET_PIN"], "18")
+		cfg.LoRaBusy = orDefault(m["LORA_BUSY_PIN"], "20")
+		cfg.LoRaDIO1 = orDefault(m["LORA_DIO1_PIN"], "16")
+		cfg.LoRaCSPin = orDefault(m["LORA_CS_PIN"], "21")
+		// Per Waveshare wiki + working Meshtastic config: don't drive BCM6 by default.
+		// SX1262's DIO2 (configured as RF switch) is sufficient for the SPDT RF switch.
+		// Setting LORA_RXEN_PIN explicitly (e.g. =6) re-enables manual driving.
+		cfg.LoRaRXEnPin = m["LORA_RXEN_PIN"]
 		cfg.LoRaSF = parseByte(m["LORA_SF"], 7)
-		cfg.LoRaBWCode = parseByte(m["LORA_BW_CODE"], 4)   // 0x04 = 125 kHz
+		cfg.LoRaBWCode = parseByte(m["LORA_BW_CODE"], 4)   // SX1262 encoding: 0x04 = 125 kHz (datasheet table 13-47)
 		cfg.LoRaCR = parseByte(m["LORA_CR"], 1)             // 0x01 = 4/5
 		cfg.LoRaFreqHz = parseUint32(m["LORA_FREQ_HZ"], 915000000)
+		cfg.LoRaTCXO = parseFloat64(m["LORA_TCXO_VOLTAGE"], 0) // 0 = crystal, 1.8 = common TCXO
 	}
 
 	return cfg, nil
@@ -116,6 +127,17 @@ func parseUint32(s string, def uint32) uint32 {
 		return def
 	}
 	return uint32(n)
+}
+
+func parseFloat64(s string, def float64) float64 {
+	if s == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return def
+	}
+	return f
 }
 
 // ── API client ────────────────────────────────────────────────────────────────
@@ -268,28 +290,36 @@ func heartbeatLoop(client *apiClient, cfg *Config) {
 
 func loraLoop(client *apiClient, cfg *Config) {
 	radio, err := NewRadio(LoRaConfig{
-		SPIDev:   cfg.LoRaSPIDev,
-		ResetPin: cfg.LoRaReset,
-		BusyPin:  cfg.LoRaBusy,
-		DIO1Pin:  cfg.LoRaDIO1,
-		FreqHz:   cfg.LoRaFreqHz,
-		SF:       cfg.LoRaSF,
-		BWCode:   cfg.LoRaBWCode,
-		CR:       cfg.LoRaCR,
+		SPIDev:      cfg.LoRaSPIDev,
+		SPIHz:       cfg.LoRaSPIHz,
+		ResetPin:    cfg.LoRaReset,
+		BusyPin:     cfg.LoRaBusy,
+		DIO1Pin:     cfg.LoRaDIO1,
+		CSPin:       cfg.LoRaCSPin,
+		RXEnPin:     cfg.LoRaRXEnPin,
+		FreqHz:      cfg.LoRaFreqHz,
+		SF:          cfg.LoRaSF,
+		BWCode:      cfg.LoRaBWCode,
+		CR:          cfg.LoRaCR,
+		TCXOVoltage: cfg.LoRaTCXO,
 	})
 	if err != nil {
-		log.Fatalf("lora: init radio: %v", err)
+		log.Printf("lora: init radio failed: %v — falling back to idle mode (is SPI enabled? try: sudo reboot)", err)
+		idleLoop()
+		return
 	}
 	defer radio.Close()
 
 	if err := radio.Init(); err != nil {
-		log.Fatalf("lora: configure radio: %v", err)
+		log.Printf("lora: configure radio failed: %v — falling back to idle mode", err)
+		idleLoop()
+		return
 	}
 
 	log.Printf("LoRa receiver ready — %d MHz SF%d BW%dkHz CR4/%d",
 		cfg.LoRaFreqHz/1000000, cfg.LoRaSF, bwCodeToKHz(cfg.LoRaBWCode), cfg.LoRaCR+4)
-	log.Printf("Listening for packets on %s (RESET=%s BUSY=%s DIO1=%s)",
-		cfg.LoRaSPIDev, cfg.LoRaReset, cfg.LoRaBusy, cfg.LoRaDIO1)
+	log.Printf("Listening for packets on %s (RESET=%s BUSY=%s DIO1=%s CS=%s)",
+		cfg.LoRaSPIDev, cfg.LoRaReset, cfg.LoRaBusy, cfg.LoRaDIO1, cfg.LoRaCSPin)
 
 	for {
 		if client.tokenExpired() {
@@ -334,21 +364,29 @@ func loraLoop(client *apiClient, cfg *Config) {
 }
 
 func bwCodeToKHz(code byte) int {
+	// SX1262 SetModulationParams BW encoding (datasheet table 13-47).
+	// NOTE: This is NOT the same as SX1276/77/78/79 — values are non-contiguous.
 	switch code {
 	case 0x00:
-		return 8
+		return 8 // 7.81 kHz
+	case 0x08:
+		return 10 // 10.42 kHz
 	case 0x01:
-		return 16
+		return 16 // 15.63 kHz
+	case 0x09:
+		return 21 // 20.83 kHz
 	case 0x02:
-		return 31
+		return 31 // 31.25 kHz
+	case 0x0A:
+		return 42 // 41.67 kHz
 	case 0x03:
-		return 63
+		return 63 // 62.50 kHz
 	case 0x04:
-		return 125
+		return 125 // 125.00 kHz
 	case 0x05:
-		return 250
+		return 250 // 250.00 kHz
 	case 0x06:
-		return 500
+		return 500 // 500.00 kHz
 	default:
 		return 125
 	}

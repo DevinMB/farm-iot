@@ -1,0 +1,9 @@
+{
+  "board": "heltec_v3",
+  "chip": "esp32s3",
+  "parts": [
+    { "file": "bootloader.bin",  "offset": 0 },
+    { "file": "partitions.bin",  "offset": 32768 },
+    { "file": "firmware.bin",    "offset": 65536 }
+  ]
+}

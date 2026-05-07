@@ -841,3 +841,109 @@ body {
   .stats-row { grid-template-columns: repeat(2, 1fr); }
   .auth-card { padding: 1.75rem 1.25rem; }
 }
+
+/* ─── BLE Provisioning ──────────────────────────────────────────────────── */
+.ble-provision {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 1rem 0 0.5rem;
+}
+.ble-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.ble-status {
+  font-size: 0.825rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  margin-top: 0.25rem;
+  text-align: center;
+}
+.ble-success {
+  background: #dcfce7;
+  color: #166534;
+}
+.ble-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+/* ─── Flash ESP32 ────────────────────────────────────────────────────────── */
+.flash-esp32 {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.flash-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.flash-title {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+.flash-progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.flash-stage-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.flash-bar-bg {
+  height: 6px;
+  background: #e2e8f0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.flash-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.flash-done {
+  font-size: 0.875rem;
+  color: #166534;
+  font-weight: 500;
+}
+.flash-error {
+  font-size: 0.8rem;
+  color: #991b1b;
+  background: #fee2e2;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+}
+.flash-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.flash-log {
+  font-size: 0.72rem;
+  font-family: monospace;
+  color: #475569;
+  background: #f1f5f9;
+  border-radius: 4px;
+  padding: 0.4rem 0.5rem;
+  max-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.node-created-divider {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+  margin: 0.25rem 0;
+}
